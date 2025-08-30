@@ -256,11 +256,5 @@ func main() {
 func handlePacket(hdr *PacketHeader, data []byte) {
 	fmt.Printf("Packet: ts=%d.%06d caplen=%d origlen=%d\n",
 		hdr.TsSec, hdr.TsUsec, hdr.CapLen, hdr.OrigLen)
-	// For example, just print first few bytes
-	/*if len(data) > 16 {
-		fmt.Printf("  Data (first 16B): % x\n", data[:16])
-	} else {
-		fmt.Printf("  Data: % x\n", data)
-	}*/
 }
 
