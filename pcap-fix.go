@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+    "flag"
 	"io"
 	"os"
     "bufio"
@@ -28,23 +29,47 @@ type PacketHeader struct {
 	OrigLen uint32
 }
 
-func validHeader(lastHdr, curHdr PacketHeader) bool {
+// wraps bufio.Writer, counts bytes written
+type CountingWriter struct {
+    w     io.Writer
+    count int64
+}
+
+func (cw *CountingWriter) Write(p []byte) (n int, err error) {
+    n, err = cw.w.Write(p)
+    cw.count += int64(n)
+    return n, err
+}
+
+func validHeader(lastHdr, curHdr PacketHeader, allowedDelta uint) bool {
 
     // A valid header (relative to the last one)
     // is one that is within +/- 1 second of the last header,
     // and whose usecs are less than 1 million
     return (curHdr.TsSec > (lastHdr.TsSec - 1) && 
-        curHdr.TsSec <= (lastHdr.TsSec + 1) &&
+        curHdr.TsSec <= (lastHdr.TsSec + uint32(allowedDelta)) &&
         curHdr.TsUsec < 1000000)
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go file.pcap")
-		return
+
+    var fname string
+    flag.StringVar(&fname, "in", "", "Input pcap file to correct")
+
+    var outfn string
+    flag.StringVar(&outfn, "out", "output.pcap", "Output (corrected) pcap")
+
+    var allowedDelta uint
+    flag.UintVar(&allowedDelta, "delta", 10, "Allowed time difference between subsequent packets, in seconds")
+    
+    flag.Parse()
+
+	if fname == "" {
+        flag.PrintDefaults()
+        os.Exit(1)
 	}
 
-	f, err := os.Open(os.Args[1])
+	f, err := os.Open(fname)
 	if err != nil {
 		panic(err)
 	}
@@ -61,12 +86,13 @@ func main() {
     reader := bufio.NewReader(f)
 
     // Create a writer (for the corrected pcap)
-    w, err := os.Create("output.pcap")
+    outf, err := os.Create(outfn)
     if err != nil {
         panic(err)
     }
-    defer w.Close()
-    writer := bufio.NewWriter(w)
+    defer outf.Close()
+    countingWriter := &CountingWriter{w: outf}
+    writer := bufio.NewWriter(countingWriter)
     defer writer.Flush()
 
 
@@ -118,8 +144,13 @@ func main() {
                 // Need to write lastHdr/lastPkt
                 binary.Write(writer, byteOrder, lastHdr)
                 writer.Write(lastPkt[:lastHdr.CapLen])
+                writer.Flush()
 
-                fmt.Printf("Finished, read %d bytes\n", read)
+                wrote := countingWriter.count
+                fmt.Printf("Finished, read %d bytes, wrote %d bytes",
+                        read, wrote)
+                fmt.Printf(" (%0.5f%%), fixed %d corruptions\n",
+                    100*float64(wrote)/float64(read), fixed)
                 break
             }
             panic(err)
@@ -127,9 +158,7 @@ func main() {
 
         //fmt.Printf("read a packet, TsSec: %d read: %d\n", ph.TsSec, read)
         // Check if it's valid
-        // maybe faster?
-        //(ph.TsSec > (lastHdr.TsSec + 2) || ph.TsSec < lastHdr.TsSec) {
-        if !first && !validHeader(lastHdr, ph) {
+        if !first && !validHeader(lastHdr, ph, allowedDelta) {
 
             // Not valid
             fmt.Printf("bad header, %d bytes in (%.3f%%) Ts=%d, Us=%d\n",
@@ -165,7 +194,7 @@ func main() {
                 }
 	  
                 // check if the header looks valid
-                if validHeader(lastHdr, ph) {
+                if validHeader(lastHdr, ph, allowedDelta) {
                     // Valid
                     fmt.Printf("Back on track, skipped %d bytes (was %d).\n",
                             walked, lastHdr.CapLen)
