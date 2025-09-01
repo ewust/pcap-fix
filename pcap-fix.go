@@ -41,14 +41,16 @@ func (cw *CountingWriter) Write(p []byte) (n int, err error) {
     return n, err
 }
 
-func validHeader(lastHdr, curHdr PacketHeader, allowedDelta uint) bool {
+func validHeader(lastHdr, curHdr PacketHeader, allowedDelta uint, snapLen uint32) bool {
 
     // A valid header (relative to the last one)
     // is one that is within +/- 1 second of the last header,
     // and whose usecs are less than 1 million
     return (curHdr.TsSec > (lastHdr.TsSec - 1) && 
         curHdr.TsSec <= (lastHdr.TsSec + uint32(allowedDelta)) &&
-        curHdr.TsUsec < 1000000)
+        curHdr.TsUsec < 1000000 &&
+        curHdr.CapLen <= snapLen &&
+        curHdr.CapLen <= curHdr.OrigLen)
 }
 
 func main() {
@@ -158,7 +160,7 @@ func main() {
 
         //fmt.Printf("read a packet, TsSec: %d read: %d\n", ph.TsSec, read)
         // Check if it's valid
-        if !first && !validHeader(lastHdr, ph, allowedDelta) {
+        if !first && !validHeader(lastHdr, ph, allowedDelta, gh.SnapLen) {
 
             // Not valid
             fmt.Printf("bad header, %d bytes in (%.3f%%) Ts=%d, Us=%d\n",
@@ -194,7 +196,7 @@ func main() {
                 }
 	  
                 // check if the header looks valid
-                if validHeader(lastHdr, ph, allowedDelta) {
+                if validHeader(lastHdr, ph, allowedDelta, gh.SnapLen) {
                     // Valid
                     fmt.Printf("Back on track, skipped %d bytes (was %d).\n",
                             walked, lastHdr.CapLen)
