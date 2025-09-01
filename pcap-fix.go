@@ -59,7 +59,7 @@ func clampCapLen(capLen uint32, snapLen uint32, bufLen int) uint32 {
 }
 
 // validity checks: avoid unsigned underflow and enforce usec range
-func validHeader(lastHdr, curHdr PacketHeader, allowedDelta uint) bool {
+func validHeader(lastHdr, curHdr PacketHeader, allowedDelta uint, snapLen uint32) bool {
 	if curHdr.TsUsec >= 1_000_000 {
 		return false
 	}
@@ -69,6 +69,9 @@ func validHeader(lastHdr, curHdr PacketHeader, allowedDelta uint) bool {
 	}
 	// and up to allowedDelta seconds forward
 	if curHdr.TsSec > lastHdr.TsSec+uint32(allowedDelta) {
+		return false
+	}
+	if curHdr.CapLen > snapLen || curHdr.CapLen > curHdr.OrigLen {
 		return false
 	}
 	return true
@@ -369,7 +372,7 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 		}
 
 		// plausibility check
-		if !first && !validHeader(lastHdr, ph, allowedDelta) {
+		if !first && !validHeader(lastHdr, ph, allowedDelta, gh.SnapLen) {
 			fmt.Printf("[%s] bad header, %d bytes in (%.3f%%) Ts=%d, Us=%d\n",
 				inPath, read, (100 * float64(read) / float64(totalSize)),
 				ph.TsSec, ph.TsUsec)
@@ -414,7 +417,7 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 					return res
 				}
 
-				if validHeader(lastHdr, ph, allowedDelta) {
+				if validHeader(lastHdr, ph, allowedDelta, gh.SnapLen) {
 					fmt.Printf("[%s] Back on track, skipped %d bytes (was %d).\n",
 						inPath, walked, lastHdr.CapLen)
 
