@@ -242,6 +242,8 @@ func main() {
 
 		packet := make([]byte, ph.CapLen)
 		if _, err := io.ReadFull(reader, packet); err != nil {
+            fmt.Printf("Error trying to read packet (read %d so far)", read)
+            printHeader(&ph)
 			panic(err)
 		}
 
@@ -255,7 +257,7 @@ func main() {
 	}
 }
 
-func handlePacket(hdr *PacketHeader, data []byte) {
+func printHeader(hdr *PacketHeader) {
 	fmt.Printf("Packet: ts=%d.%06d caplen=%d origlen=%d\n",
 		hdr.TsSec, hdr.TsUsec, hdr.CapLen, hdr.OrigLen)
 }
