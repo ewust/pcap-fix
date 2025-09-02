@@ -373,9 +373,10 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 
 		// plausibility check
 		if !first && !validHeader(lastHdr, ph, allowedDelta, gh.SnapLen) {
-			fmt.Printf("[%s] bad header, %d bytes in (%.3f%%) Ts=%d, Us=%d\n",
+			fmt.Printf("[%s] bad header, %d bytes in (%.3f%%) Ts=%d, Us=%d Caplen %d bytes. Last was Ts=%d, Us=%d Caplen %d bytes\n",
 				inPath, read, (100 * float64(read) / float64(totalSize)),
-				ph.TsSec, ph.TsUsec)
+				ph.TsSec, ph.TsUsec, ph.CapLen,
+				lastHdr.TsSec, lastHdr.TsUsec, lastHdr.CapLen)
 
 			// rewind to start of previous payload
 			read -= int64(lastHdr.CapLen)
