@@ -158,8 +158,8 @@ func uniqueTempPath(finalPath string) string {
 	}
 }
 
-// Decompress a zstd file to a temp file; return temp path and decompressed size.
-func decompressZstdToTemp(inPath string) (string, int64, error) {
+// Decompress a zstd file to a temp file inside outdir; return temp path and decompressed size.
+func decompressZstdToTemp(inPath string, outdir string) (string, int64, error) {
 	f, err := os.Open(inPath)
 	if err != nil {
 		return "", 0, err
@@ -172,7 +172,8 @@ func decompressZstdToTemp(inPath string) (string, int64, error) {
 	}
 	defer dec.Close()
 
-	tmp, err := os.CreateTemp("", "pcapfix-decompressed-*.pcap")
+	// IMPORTANT: place decompressed temp in outdir (NOT system temp like /tmp)
+	tmp, err := os.CreateTemp(outdir, "pcapfix-decompressed-*.pcap")
 	if err != nil {
 		return "", 0, err
 	}
@@ -211,7 +212,7 @@ func verifyPcap(path string) (int, error) {
 }
 
 // processOne repairs a single PCAP, returning stats.
-// If compression == "zstd", it first decompresses to a temp file and parses that.
+// If compression == "zstd", it first decompresses to a temp file in outdir and parses that.
 // Writes to a temp output; promotes to final only when fixes > 0.
 // If verify==true and fixes>0, verifies the fixed file; sets stillCorrupted accordingly.
 // On any error, fixes = -1 and stillCorrupted = 1. Output is discarded.
@@ -230,7 +231,7 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 
 	// Choose input path: decompressed temp or original
 	if compression == "zstd" {
-		tmp, n, err := decompressZstdToTemp(inPath)
+		tmp, n, err := decompressZstdToTemp(inPath, outdir)
 		if err != nil {
 			res.err = err
 			res.fixes = -1
