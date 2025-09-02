@@ -346,6 +346,8 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 
 	tr := TsRing{}
 
+	npkts := 0 // Number packets
+
 	// Iterate over packets
 	for {
 		var ph PacketHeader
@@ -379,8 +381,8 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 				}
 				// success EOF
 				wrote = countingWriter.count
-				fmt.Printf("[%s] Finished, read %d bytes, wrote %d bytes (%.5f%%), fixed %d corruptions\n",
-					inPath, read, wrote, 100*float64(wrote)/float64(read), fixes)
+				fmt.Printf("[%s] Finished, read %d bytes, wrote %d bytes (%.5f%%), fixed %d corruptions (in %d packets)\n",
+					inPath, read, wrote, 100*float64(wrote)/float64(read), fixes, npkts)
 
 				// Decide whether to keep
 				if fixes > 0 {
@@ -553,6 +555,7 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 		lastHdr = ph // retain original header; we clamp on write
 		// lastPkt already holds up to 'keep' bytes
 		read += int64(ph.CapLen)
+		npkts++
 	}
 }
 
