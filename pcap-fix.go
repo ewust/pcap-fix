@@ -47,6 +47,47 @@ func (cw *CountingWriter) Write(p []byte) (n int, err error) {
 	return n, err
 }
 
+const TsRingSize = 8
+
+type TsRing struct {
+	ts [TsRingSize]uint32 // N most recent TsSec values
+	// 0 is an invalid TsSec that we ignore (so no need to have n)
+	idx uint // current idx we insert at (circular buffer)
+}
+
+func (tr *TsRing) Add(ts uint32) {
+	tr.ts[tr.idx] = ts
+	tr.idx++
+	tr.idx %= TsRingSize
+}
+
+func (tr *TsRing) IsValid(ts uint32, allowedDelta uint) bool {
+
+	smallest := tr.ts[0] // Start with first
+	biggest := tr.ts[0]
+	for _, v := range tr.ts {
+		if v < smallest {
+			smallest = v
+		}
+		if v > biggest {
+			biggest = v
+		}
+	}
+	// If everything is empty, the timestamp is assumed valid (first timestamp)
+	if smallest == 0 && biggest == 0 {
+		return true
+	}
+	// Allow up to 1s backward from smallest past N TsSecs
+	if ts+1 < smallest {
+		return false
+	}
+	// and up to allowedDelta seconds forward (from...largest?)
+	if ts > biggest+uint32(allowedDelta) {
+		return false
+	}
+	return true
+}
+
 // clampCapLen ensures we never write/read beyond snaplen or buffer size.
 func clampCapLen(capLen uint32, snapLen uint32, bufLen int) uint32 {
 	if capLen > snapLen {
@@ -59,16 +100,21 @@ func clampCapLen(capLen uint32, snapLen uint32, bufLen int) uint32 {
 }
 
 // validity checks: avoid unsigned underflow and enforce usec range
-func validHeader(lastHdr, curHdr PacketHeader, allowedDelta uint, snapLen uint32) bool {
+func validHeader(lastHdr, curHdr PacketHeader, allowedDelta uint, snapLen uint32, tr *TsRing) bool {
 	if curHdr.TsUsec >= 1_000_000 {
 		return false
 	}
-	// allow up to 1s backward (avoid uint underflow)
-	if curHdr.TsSec+1 < lastHdr.TsSec {
-		return false
-	}
-	// and up to allowedDelta seconds forward
-	if curHdr.TsSec > lastHdr.TsSec+uint32(allowedDelta) {
+	/*
+		// allow up to 1s backward (avoid uint underflow)
+		if curHdr.TsSec+1 < lastHdr.TsSec {
+			return false
+		}
+		// and up to allowedDelta seconds forward
+		if curHdr.TsSec > lastHdr.TsSec+uint32(allowedDelta) {
+			return false
+		}
+	*/
+	if !tr.IsValid(curHdr.TsSec, allowedDelta) {
 		return false
 	}
 	if curHdr.CapLen > snapLen || curHdr.CapLen > curHdr.OrigLen {
@@ -298,6 +344,8 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 
 	read = 24 // sizeof(GlobalHeader)
 
+	tr := TsRing{}
+
 	// Iterate over packets
 	for {
 		var ph PacketHeader
@@ -372,7 +420,7 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 		}
 
 		// plausibility check
-		if !first && !validHeader(lastHdr, ph, allowedDelta, gh.SnapLen) {
+		if !first && !validHeader(lastHdr, ph, allowedDelta, gh.SnapLen, &tr) {
 			fmt.Printf("[%s] bad header, %d bytes in (%.3f%%) Ts=%d, Us=%d Caplen %d bytes. Last was Ts=%d, Us=%d Caplen %d bytes\n",
 				inPath, read, (100 * float64(read) / float64(totalSize)),
 				ph.TsSec, ph.TsUsec, ph.CapLen,
@@ -418,7 +466,7 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 					return res
 				}
 
-				if validHeader(lastHdr, ph, allowedDelta, gh.SnapLen) {
+				if validHeader(lastHdr, ph, allowedDelta, gh.SnapLen, &tr) {
 					fmt.Printf("[%s] Back on track, skipped %d bytes (was %d).\n",
 						inPath, walked, lastHdr.CapLen)
 
@@ -473,6 +521,9 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 				return res
 			}
 		}
+
+		// Add current TsSec to the ring of TsSec values we've seen
+		tr.Add(ph.TsSec)
 
 		// read current packet payload
 		read += 16 // sizeof(PacketHeader)
