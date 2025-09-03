@@ -348,6 +348,7 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 	tr := TsRing{}
 
 	npkts := 0 // Number packets
+	largest := uint32(0)
 
 	// Iterate over packets
 	for {
@@ -384,6 +385,7 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 				wrote = countingWriter.count
 				fmt.Printf("[%s] Finished, read %d bytes, wrote %d bytes (%.5f%%), fixed %d corruptions (in %d packets)\n",
 					inPath, read, wrote, 100*float64(wrote)/float64(read), fixes, npkts)
+				fmt.Printf("Largest pkt: %d bytes\n", largest)
 
 				// Decide whether to keep
 				if fixes > 0 {
@@ -494,9 +496,9 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 					break
 				}
 
-				if walked > 10000 {
+				if walked > int(gh.SnapLen) {
 					fmt.Printf("[%s] Didn't re-align, giving up...\n", inPath)
-					res.err = fmt.Errorf("realignment exceeded 10000 bytes")
+					res.err = fmt.Errorf("realignment exceeded %d bytes", gh.SnapLen)
 					res.fixes = -1
 					res.stillCorrupted = 1
 					_ = os.Remove(tmpOut)
@@ -509,6 +511,10 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 			// write cached previous packet (clamped)
 			capToWrite := clampCapLen(lastHdr.CapLen, gh.SnapLen, len(lastPkt))
 			lastHdr.CapLen = capToWrite
+
+			if lastHdr.CapLen > largest {
+				largest = lastHdr.CapLen
+			}
 			if err := binary.Write(writer, byteOrder, lastHdr); err != nil {
 				res.err = err
 				res.fixes = -1
