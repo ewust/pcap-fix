@@ -217,7 +217,7 @@ func verifyPcap(path string) (int, error) {
 // If verify==true and fixes>0, verifies the fixed file; sets stillCorrupted accordingly.
 // On any error, fixes = -1 and stillCorrupted = 1. Output is discarded.
 func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, verify bool) result {
-	res := result{inPath: inPath, outPath: deriveOutPath(inPath, suffix, outdir)}
+	res := result{inPath: inPath, outPath: deriveOutPath(inPath, suffix, outdir), fixes: -1, stillCorrupted: 1}
 	tmpOut := uniqueTempPath(res.outPath)
 
 	var wrote int64
@@ -234,8 +234,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 		tmp, n, err := decompressZstdToTemp(inPath, outdir)
 		if err != nil {
 			res.err = err
-			res.fixes = -1
-			res.stillCorrupted = 1 // error path → mark corrupted
 			return res
 		}
 		decompTmp = tmp
@@ -247,8 +245,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 		fi, err := os.Stat(srcPath)
 		if err != nil {
 			res.err = err
-			res.fixes = -1
-			res.stillCorrupted = 1
 			return res
 		}
 		totalSize = fi.Size()
@@ -265,8 +261,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 	f, err := os.Open(srcPath)
 	if err != nil {
 		res.err = err
-		res.fixes = -1
-		res.stillCorrupted = 1
 		return res
 	}
 	defer f.Close()
@@ -278,11 +272,11 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 	outf, err := os.Create(tmpOut)
 	if err != nil {
 		res.err = err
-		res.fixes = -1
-		res.stillCorrupted = 1
 		return res
 	}
 	defer outf.Close()
+	defer os.Remove(tmpOut)
+
 	countingWriter := &CountingWriter{w: outf}
 	writer := bufio.NewWriter(countingWriter)
 	defer writer.Flush()
@@ -291,9 +285,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 	peek4, err := reader.Peek(4)
 	if err != nil {
 		res.err = fmt.Errorf("unable to read magic number: %w", err)
-		res.fixes = -1
-		res.stillCorrupted = 1
-		_ = os.Remove(tmpOut)
 		return res
 	}
 	magicLE := binary.LittleEndian.Uint32(peek4)
@@ -312,9 +303,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 		fmt.Printf("[%s] Big endian\n", inPath)
 	default:
 		res.err = fmt.Errorf("unknown magic number bytes: % x", peek4)
-		res.fixes = -1
-		res.stillCorrupted = 1
-		_ = os.Remove(tmpOut)
 		return res
 	}
 
@@ -322,9 +310,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 	var gh GlobalHeader
 	if err := binary.Read(reader, byteOrder, &gh); err != nil {
 		res.err = err
-		res.fixes = -1
-		res.stillCorrupted = 1
-		_ = os.Remove(tmpOut)
 		return res
 	}
 	fmt.Printf("[%s] PCAP Version %d.%d, SnapLen=%d, Network=%d\n",
@@ -333,9 +318,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 	// Write global header to output
 	if err := binary.Write(writer, byteOrder, gh); err != nil {
 		res.err = err
-		res.fixes = -1
-		res.stillCorrupted = 1
-		_ = os.Remove(tmpOut)
 		return res
 	}
 
@@ -361,23 +343,14 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 					lastHdr.CapLen = capToWrite
 					if err := binary.Write(writer, byteOrder, lastHdr); err != nil {
 						res.err = err
-						res.fixes = -1
-						res.stillCorrupted = 1
-						_ = os.Remove(tmpOut)
 						return res
 					}
 					if _, err := writer.Write(lastPkt[:capToWrite]); err != nil {
 						res.err = err
-						res.fixes = -1
-						res.stillCorrupted = 1
-						_ = os.Remove(tmpOut)
 						return res
 					}
 					if err := writer.Flush(); err != nil {
 						res.err = err
-						res.fixes = -1
-						res.stillCorrupted = 1
-						_ = os.Remove(tmpOut)
 						return res
 					}
 				}
@@ -392,9 +365,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 					_ = os.Remove(res.outPath) // best-effort (Windows)
 					if err := os.Rename(tmpOut, res.outPath); err != nil {
 						res.err = fmt.Errorf("rename failed: %w", err)
-						res.fixes = -1
-						res.stillCorrupted = 1
-						_ = os.Remove(tmpOut)
 						return res
 					}
 					// Verify fixed file if requested
@@ -406,7 +376,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 						}
 					}
 				} else {
-					_ = os.Remove(tmpOut) // zero fixes → discard
 					// No fixes → per spec, skip verification; mark 0
 					res.stillCorrupted = 0
 				}
@@ -418,9 +387,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 			}
 			// other read error
 			res.err = err
-			res.fixes = -1
-			res.stillCorrupted = 1
-			_ = os.Remove(tmpOut)
 			return res
 		}
 
@@ -435,9 +401,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 			read -= int64(lastHdr.CapLen)
 			if _, err := f.Seek(read, io.SeekStart); err != nil {
 				res.err = err
-				res.fixes = -1
-				res.stillCorrupted = 1
-				_ = os.Remove(tmpOut)
 				return res
 			}
 			reader = bufio.NewReader(f)
@@ -446,28 +409,22 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 			walked := 0
 			for {
 				if _, err := reader.ReadByte(); err != nil {
+					fmt.Printf("EOF in walking one byte\n")
 					res.err = err
-					res.fixes = -1
-					res.stillCorrupted = 1
-					_ = os.Remove(tmpOut)
 					return res
 				}
 				walked++
 
 				peekData, err := reader.Peek(16) // sizeof(PacketHeader)
 				if err != nil {
+					fmt.Printf("Err in peeking 16 byte\n")
 					res.err = err
-					res.fixes = -1
-					res.stillCorrupted = 1
-					_ = os.Remove(tmpOut)
 					return res
 				}
 				peekReader := bytes.NewReader(peekData)
 				if err = binary.Read(peekReader, byteOrder, &ph); err != nil {
+					fmt.Printf("Err in parsing while walking\n")
 					res.err = err
-					res.fixes = -1
-					res.stillCorrupted = 1
-					_ = os.Remove(tmpOut)
 					return res
 				}
 
@@ -476,10 +433,8 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 						inPath, walked, lastHdr.CapLen)
 
 					if _, err := reader.Discard(16); err != nil {
+						fmt.Printf("Err discarding header after finding valid one\n")
 						res.err = err
-						res.fixes = -1
-						res.stillCorrupted = 1
-						_ = os.Remove(tmpOut)
 						return res
 					}
 
@@ -499,9 +454,6 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 				if walked > int(gh.SnapLen) {
 					fmt.Printf("[%s] Didn't re-align, giving up...\n", inPath)
 					res.err = fmt.Errorf("realignment exceeded %d bytes", gh.SnapLen)
-					res.fixes = -1
-					res.stillCorrupted = 1
-					_ = os.Remove(tmpOut)
 					return res
 				}
 			}
@@ -517,16 +469,10 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 			}
 			if err := binary.Write(writer, byteOrder, lastHdr); err != nil {
 				res.err = err
-				res.fixes = -1
-				res.stillCorrupted = 1
-				_ = os.Remove(tmpOut)
 				return res
 			}
 			if _, err := writer.Write(lastPkt[:capToWrite]); err != nil {
 				res.err = err
-				res.fixes = -1
-				res.stillCorrupted = 1
-				_ = os.Remove(tmpOut)
 				return res
 			}
 		}
@@ -540,20 +486,42 @@ func processOne(inPath, suffix, outdir, compression string, allowedDelta uint, v
 		// only keep up to snaplen in memory; discard the rest
 		keep := clampCapLen(ph.CapLen, gh.SnapLen, len(lastPkt))
 		if keep > 0 {
-			if _, err := io.ReadFull(reader, lastPkt[:keep]); err != nil {
+			if n, err := io.ReadFull(reader, lastPkt[:keep]); err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					// This means we EOF halfway through a packet.
+					// Write this header (and partial fragment)
+					// and call it success.
+					if err := binary.Write(writer, byteOrder, lastHdr); err != nil {
+						res.err = err
+						return res
+					}
+					if _, err := writer.Write(lastPkt[:n]); err != nil {
+						res.err = err
+						return res
+					}
+
+					if fixes > 0 {
+						if err := os.Rename(tmpOut, res.outPath); err != nil {
+							res.err = fmt.Errorf("rename failed: %w", err)
+							return res
+						}
+					}
+
+					// We know we're still corrupted (last packet trunkated),
+					// so no need to verify.
+					res.fixes = fixes
+					res.bytesRead = read
+					res.bytesWrote = countingWriter.count
+					return res
+
+				}
 				res.err = err
-				res.fixes = -1
-				res.stillCorrupted = 1
-				_ = os.Remove(tmpOut)
 				return res
 			}
 		}
 		if extra := int64(ph.CapLen) - int64(keep); extra > 0 {
 			if _, err := io.CopyN(io.Discard, reader, extra); err != nil {
 				res.err = err
-				res.fixes = -1
-				res.stillCorrupted = 1
-				_ = os.Remove(tmpOut)
 				return res
 			}
 		}
